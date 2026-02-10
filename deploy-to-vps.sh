@@ -153,12 +153,9 @@ NC='\033[0m'
 
 SERVICE_FILE="/etc/systemd/system/cliproxyapi.service"
 
-if [ -f "$SERVICE_FILE" ]; then
-    echo -e "${GREEN}[VPS]${NC} systemd 服务已存在，跳过创建"
-else
-    echo -e "${GREEN}[VPS]${NC} 创建 systemd 服务..."
+echo -e "${GREEN}[VPS]${NC} 更新 systemd 服务配置..."
 
-    sudo tee "$SERVICE_FILE" > /dev/null << 'EOF'
+sudo tee "$SERVICE_FILE" > /dev/null << 'EOF'
 [Unit]
 Description=CLIProxyAPI - OAuth-based AI API Proxy
 After=network.target
@@ -168,7 +165,7 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/cliproxyapi
-ExecStart=/home/ubuntu/cliproxyapi/cliproxy-server
+ExecStart=/home/ubuntu/cliproxyapi/cliproxyapi
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -176,6 +173,7 @@ StandardError=journal
 SyslogIdentifier=cliproxyapi
 
 Environment="PATH=/usr/local/go/bin:/usr/bin:/bin"
+Environment="MANAGEMENT_STATIC_PATH=/home/ubuntu/cliproxyapi/static"
 
 NoNewPrivileges=true
 PrivateTmp=true
@@ -184,11 +182,10 @@ PrivateTmp=true
 WantedBy=multi-user.target
 EOF
 
-    sudo systemctl daemon-reload
-    sudo systemctl enable cliproxyapi
+sudo systemctl daemon-reload
+sudo systemctl enable cliproxyapi
 
-    echo -e "${GREEN}[VPS]${NC} ✅ systemd 服务创建完成"
-fi
+echo -e "${GREEN}[VPS]${NC} ✅ systemd 服务配置完成"
 
 ENDSSH
 

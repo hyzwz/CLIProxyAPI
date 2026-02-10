@@ -157,14 +157,14 @@ func (o *ClaudeAuth) queryOAuthUsage(ctx context.Context, accessToken string) (*
 	}
 
 	// Store OAuth rolling window usage data
-	// Utilization is a percentage (0-1), convert to 0-100 range
-	quotaInfo.FiveHourUtilization = usageData.FiveHour.Utilization * 100
+	// Utilization is already a percentage (0-100) from the API
+	quotaInfo.FiveHourUtilization = usageData.FiveHour.Utilization
 	quotaInfo.FiveHourResetsAt = usageData.FiveHour.ResetsAt
 
-	quotaInfo.SevenDayUtilization = usageData.SevenDay.Utilization * 100
+	quotaInfo.SevenDayUtilization = usageData.SevenDay.Utilization
 	quotaInfo.SevenDayResetsAt = usageData.SevenDay.ResetsAt
 
-	quotaInfo.SevenDaySonnetUtil = usageData.SevenDaySonnet.Utilization * 100
+	quotaInfo.SevenDaySonnetUtil = usageData.SevenDaySonnet.Utilization
 	quotaInfo.SevenDaySonnetResets = usageData.SevenDaySonnet.ResetsAt
 
 	// For backward compatibility with UI expecting monthly quota:

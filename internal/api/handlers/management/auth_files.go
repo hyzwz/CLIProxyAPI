@@ -2266,3 +2266,86 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "wait"})
 }
+
+// GetAuthFileQuota queries the quota information for a specific auth file
+func (h *Handler) GetAuthFileQuota(c *gin.Context) {
+	name := strings.TrimSpace(c.Query("name"))
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name parameter is required"})
+		return
+	}
+
+	// Find auth by name or ID
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "auth manager unavailable"})
+		return
+	}
+
+	var targetAuth *coreauth.Auth
+	auths := h.authManager.List()
+	for _, auth := range auths {
+		if auth.FileName == name || auth.ID == name {
+			targetAuth = auth
+			break
+		}
+	}
+
+	if targetAuth == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "auth file not found"})
+		return
+	}
+
+	// Only Claude provider supports quota queries
+	provider := strings.ToLower(strings.TrimSpace(targetAuth.Provider))
+	if provider != "claude" && provider != "anthropic" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":    "quota query not supported for this provider",
+			"provider": targetAuth.Provider,
+		})
+		return
+	}
+
+	// Extract Claude token storage
+	storage, ok := targetAuth.Storage.(*claude.ClaudeTokenStorage)
+	if !ok || storage == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid token storage format"})
+		return
+	}
+
+	// Query quota information
+	ctx := c.Request.Context()
+	quota, err := claude.GetQuotaFromStorage(ctx, storage)
+	if err != nil {
+		log.WithError(err).Errorf("failed to query quota for %s", name)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "failed to query quota",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// Build response
+	response := gin.H{
+		"auth_file":         name,
+		"provider":          targetAuth.Provider,
+		"email":             quota.Email,
+		"organization_id":   quota.OrganizationID,
+		"organization_name": quota.OrganizationName,
+		"plan_type":         quota.PlanType,
+		"quota": gin.H{
+			"monthly_quota":    quota.MonthlyQuota,
+			"used_quota":       quota.UsedQuota,
+			"remaining_quota":  quota.RemainingQuota,
+			"quota_percentage": fmt.Sprintf("%.2f%%", quota.QuotaPercentage),
+			"reset_date":       quota.QuotaResetDate,
+			"reset_time":       quota.QuotaResetTime,
+		},
+		"rate_limit": gin.H{
+			"requests_limit":     quota.RequestsLimit,
+			"requests_remaining": quota.RequestsRemaining,
+		},
+		"last_updated": quota.LastUpdated,
+	}
+
+	c.JSON(http.StatusOK, response)
+}

@@ -86,8 +86,13 @@ go build -o cliproxy-server ./cmd/server
 # 设置可执行权限
 chmod +x cliproxy-server
 
+# 复制为 systemd 服务使用的名称
+echo -e "${GREEN}[VPS]${NC} 更新服务二进制文件..."
+cp cliproxy-server cliproxyapi
+chmod +x cliproxyapi
+
 echo -e "${GREEN}[VPS]${NC} ✅ 后端部署完成"
-echo -e "${GREEN}[VPS]${NC} 二进制文件: $DEPLOY_DIR/cliproxy-server"
+echo -e "${GREEN}[VPS]${NC} 二进制文件: $DEPLOY_DIR/cliproxyapi"
 
 ENDSSH
 

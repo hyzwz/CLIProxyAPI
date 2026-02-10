@@ -124,6 +124,15 @@ func (o *ClaudeAuth) queryQuotaEndpoint(ctx context.Context, accessToken, endpoi
 	if resp.StatusCode != http.StatusOK {
 		// Log response for debugging
 		log.Debugf("Quota endpoint %s returned status %d: %s", endpoint, resp.StatusCode, string(body))
+
+		// Provide user-friendly error message for common cases
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("quota API endpoint not found - this account may not have access to organization quota information (individual/free accounts don't support quota queries)")
+		}
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("access denied - this OAuth token may not have permission to view quota information")
+		}
+
 		return nil, fmt.Errorf("quota request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 

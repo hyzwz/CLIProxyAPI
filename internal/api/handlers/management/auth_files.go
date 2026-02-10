@@ -2305,10 +2305,41 @@ func (h *Handler) GetAuthFileQuota(c *gin.Context) {
 		return
 	}
 
-	// Extract Claude token storage
-	storage, ok := targetAuth.Storage.(*claude.ClaudeTokenStorage)
-	if !ok || storage == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid token storage format"})
+	// Extract Claude token storage from either Storage field or Metadata
+	var storage *claude.ClaudeTokenStorage
+	if targetAuth.Storage != nil {
+		var ok bool
+		storage, ok = targetAuth.Storage.(*claude.ClaudeTokenStorage)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid token storage format"})
+			return
+		}
+	} else if targetAuth.Metadata != nil {
+		// Create ClaudeTokenStorage from Metadata when Storage field is not available
+		storage = &claude.ClaudeTokenStorage{}
+		if accessToken, ok := targetAuth.Metadata["access_token"].(string); ok {
+			storage.AccessToken = accessToken
+		}
+		if refreshToken, ok := targetAuth.Metadata["refresh_token"].(string); ok {
+			storage.RefreshToken = refreshToken
+		}
+		if idToken, ok := targetAuth.Metadata["id_token"].(string); ok {
+			storage.IDToken = idToken
+		}
+		if email, ok := targetAuth.Metadata["email"].(string); ok {
+			storage.Email = email
+		}
+		if lastRefresh, ok := targetAuth.Metadata["last_refresh"].(string); ok {
+			storage.LastRefresh = lastRefresh
+		}
+		if expire, ok := targetAuth.Metadata["expired"].(string); ok {
+			storage.Expire = expire
+		}
+		storage.Type = "claude"
+	}
+
+	if storage == nil || storage.AccessToken == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "access token not found in auth file"})
 		return
 	}
 

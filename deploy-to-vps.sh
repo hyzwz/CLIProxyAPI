@@ -86,8 +86,11 @@ go build -o cliproxy-server ./cmd/server
 # 设置可执行权限
 chmod +x cliproxy-server
 
-# 复制为 systemd 服务使用的名称
+# 复制为 systemd 服务使用的名称（先备份旧的，避免 text file busy）
 echo -e "${GREEN}[VPS]${NC} 更新服务二进制文件..."
+if [ -f cliproxyapi ]; then
+    mv cliproxyapi cliproxyapi.old
+fi
 cp cliproxy-server cliproxyapi
 chmod +x cliproxyapi
 

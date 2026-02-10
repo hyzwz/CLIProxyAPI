@@ -177,6 +177,12 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 		ctx = context.Background()
 	}
 
+	// Skip auto-update if using custom static path
+	if strings.TrimSpace(os.Getenv("MANAGEMENT_STATIC_PATH")) != "" {
+		log.Debug("management asset sync skipped: custom MANAGEMENT_STATIC_PATH is set")
+		return
+	}
+
 	staticDir = strings.TrimSpace(staticDir)
 	if staticDir == "" {
 		log.Debug("management asset sync skipped: empty static directory")

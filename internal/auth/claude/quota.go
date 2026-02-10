@@ -69,29 +69,32 @@ type quotaResponse struct {
 	} `json:"account"`
 }
 
-// GetQuotaInfo queries the Claude.ai API for organization and quota information
+// GetQuotaInfo queries the Anthropic OAuth Usage API for quota information
 func (o *ClaudeAuth) GetQuotaInfo(ctx context.Context, accessToken string) (*QuotaInfo, error) {
 	if strings.TrimSpace(accessToken) == "" {
 		return nil, fmt.Errorf("access token is required")
 	}
 
-	// Use claude.ai/api/organizations endpoint (this works for OAuth tokens)
-	return o.queryOrganizations(ctx, accessToken)
+	// Use api.anthropic.com/api/oauth/usage endpoint (correct endpoint for OAuth usage stats)
+	return o.queryOAuthUsage(ctx, accessToken)
 }
 
-// queryOrganizations queries claude.ai/api/organizations for OAuth account info
-func (o *ClaudeAuth) queryOrganizations(ctx context.Context, accessToken string) (*QuotaInfo, error) {
-	url := ClaudeAIAPIBaseURL + "/organizations"
+// queryOAuthUsage queries api.anthropic.com/api/oauth/usage for detailed usage statistics
+func (o *ClaudeAuth) queryOAuthUsage(ctx context.Context, accessToken string) (*QuotaInfo, error) {
+	url := "https://api.anthropic.com/api/oauth/usage"
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Use Bearer token authentication for OAuth tokens
+	// Set required headers for OAuth usage API
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("anthropic-beta", "oauth-2025-04-20") // Required beta header
+	req.Header.Set("User-Agent", "claude-cli/2.0.53 (external, cli)")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -106,81 +109,62 @@ func (o *ClaudeAuth) queryOrganizations(ctx context.Context, accessToken string)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Debugf("Organizations API returned status %d: %s", resp.StatusCode, string(body))
+		log.Debugf("OAuth usage API returned status %d: %s", resp.StatusCode, string(body))
 
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		if resp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("access forbidden - this account may use Setup Token instead of OAuth")
+		}
+
+		if resp.StatusCode == http.StatusUnauthorized {
 			return nil, fmt.Errorf("authentication failed - token may be invalid or expired")
 		}
 
 		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse organizations response
-	var orgs []map[string]interface{}
-	if err := json.Unmarshal(body, &orgs); err != nil {
+	// Parse OAuth usage response
+	var usageData struct {
+		FiveHour struct {
+			Utilization float64 `json:"utilization"`
+			ResetsAt    string  `json:"resets_at"`
+		} `json:"five_hour"`
+		SevenDay struct {
+			Utilization float64 `json:"utilization"`
+			ResetsAt    string  `json:"resets_at"`
+		} `json:"seven_day"`
+		SevenDaySonnet struct {
+			Utilization float64 `json:"utilization"`
+			ResetsAt    string  `json:"resets_at"`
+		} `json:"seven_day_sonnet"`
+	}
+
+	if err := json.Unmarshal(body, &usageData); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	if len(orgs) == 0 {
-		return nil, fmt.Errorf("no organizations found for this account")
-	}
-
-	// Find the best organization (one with most capabilities including 'chat')
-	var bestOrg map[string]interface{}
-	maxCaps := 0
-	for _, org := range orgs {
-		caps, ok := org["capabilities"].([]interface{})
-		if !ok {
-			continue
-		}
-
-		// Check if has 'chat' capability
-		hasChat := false
-		for _, cap := range caps {
-			if capStr, ok := cap.(string); ok && capStr == "chat" {
-				hasChat = true
-				break
-			}
-		}
-
-		if hasChat && len(caps) > maxCaps {
-			bestOrg = org
-			maxCaps = len(caps)
-		}
-	}
-
-	if bestOrg == nil {
-		return nil, fmt.Errorf("no organization with chat capability found")
-	}
-
-	// Extract quota information from organization data
+	// Build QuotaInfo from usage data
 	quotaInfo := &QuotaInfo{
 		LastUpdated: time.Now(),
 	}
 
-	// Extract basic organization info
-	if uuid, ok := bestOrg["uuid"].(string); ok {
-		quotaInfo.OrganizationID = uuid
-	}
-	if name, ok := bestOrg["name"].(string); ok {
-		quotaInfo.OrganizationName = name
-	}
+	// Convert 5-hour utilization to quota info
+	// Utilization is a percentage (0-1), convert to percentage string
+	fiveHourPercent := usageData.FiveHour.Utilization * 100
+	quotaInfo.QuotaPercentage = fiveHourPercent
+	quotaInfo.QuotaResetDate = usageData.FiveHour.ResetsAt
 
-	// Extract plan/subscription information
-	if settings, ok := bestOrg["settings"].(map[string]interface{}); ok {
-		if plan, ok := settings["plan"].(map[string]interface{}); ok {
-			if planType, ok := plan["type"].(string); ok {
-				quotaInfo.PlanType = planType
-			}
+	// Parse reset time
+	if usageData.FiveHour.ResetsAt != "" {
+		if resetTime, err := time.Parse(time.RFC3339, usageData.FiveHour.ResetsAt); err == nil {
+			quotaInfo.QuotaResetTime = resetTime.Unix()
 		}
 	}
 
-	// Note: claude.ai/api/organizations doesn't return detailed usage quotas
-	// This endpoint primarily returns organization metadata and capabilities
-	// For detailed usage, would need different endpoint or approach
+	// Set plan type based on available data (basic OAuth accounts)
+	quotaInfo.PlanType = "oauth"
 
-	log.Debugf("Successfully retrieved organization info: %s (Plan: %s)",
-		quotaInfo.OrganizationName, quotaInfo.PlanType)
+	log.Debugf("Successfully retrieved OAuth usage: 5h=%.1f%%, 7d=%.1f%%",
+		fiveHourPercent, usageData.SevenDay.Utilization*100)
 
 	return quotaInfo, nil
 }

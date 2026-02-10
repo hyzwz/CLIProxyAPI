@@ -26,7 +26,7 @@ type QuotaInfo struct {
 	OrganizationID   string `json:"organization_id"`
 	OrganizationName string `json:"organization_name"`
 
-	// Quota details
+	// Quota details (for API key accounts with absolute quotas)
 	MonthlyQuota     int64   `json:"monthly_quota"`      // Monthly quota in tokens
 	UsedQuota        int64   `json:"used_quota"`         // Used tokens this month
 	RemainingQuota   int64   `json:"remaining_quota"`    // Remaining tokens
@@ -34,12 +34,20 @@ type QuotaInfo struct {
 	QuotaResetDate   string  `json:"quota_reset_date"`   // Next reset date
 	QuotaResetTime   int64   `json:"quota_reset_time"`   // Next reset timestamp
 
+	// OAuth rolling window usage (for OAuth accounts)
+	FiveHourUtilization  float64 `json:"five_hour_utilization"`   // 5-hour window usage (0-100%)
+	FiveHourResetsAt     string  `json:"five_hour_resets_at"`     // 5-hour window reset time
+	SevenDayUtilization  float64 `json:"seven_day_utilization"`   // 7-day window usage (0-100%)
+	SevenDayResetsAt     string  `json:"seven_day_resets_at"`     // 7-day window reset time
+	SevenDaySonnetUtil   float64 `json:"seven_day_sonnet_util"`   // 7-day Sonnet usage (0-100%)
+	SevenDaySonnetResets string  `json:"seven_day_sonnet_resets"` // 7-day Sonnet reset time
+
 	// Rate limit information
 	RequestsLimit     int `json:"requests_limit"`      // Requests per minute
 	RequestsRemaining int `json:"requests_remaining"`  // Remaining requests
 
 	// Account tier
-	PlanType string `json:"plan_type"` // e.g., "free", "pro", "team"
+	PlanType string `json:"plan_type"` // e.g., "free", "pro", "team", "oauth"
 
 	// Additional metadata
 	LastUpdated time.Time `json:"last_updated"`
@@ -145,12 +153,23 @@ func (o *ClaudeAuth) queryOAuthUsage(ctx context.Context, accessToken string) (*
 	// Build QuotaInfo from usage data
 	quotaInfo := &QuotaInfo{
 		LastUpdated: time.Now(),
+		PlanType:    "oauth", // OAuth account type
 	}
 
-	// Convert 5-hour utilization to quota info
-	// Utilization is a percentage (0-1), convert to percentage string
-	fiveHourPercent := usageData.FiveHour.Utilization * 100
-	quotaInfo.QuotaPercentage = fiveHourPercent
+	// Store OAuth rolling window usage data
+	// Utilization is a percentage (0-1), convert to 0-100 range
+	quotaInfo.FiveHourUtilization = usageData.FiveHour.Utilization * 100
+	quotaInfo.FiveHourResetsAt = usageData.FiveHour.ResetsAt
+
+	quotaInfo.SevenDayUtilization = usageData.SevenDay.Utilization * 100
+	quotaInfo.SevenDayResetsAt = usageData.SevenDay.ResetsAt
+
+	quotaInfo.SevenDaySonnetUtil = usageData.SevenDaySonnet.Utilization * 100
+	quotaInfo.SevenDaySonnetResets = usageData.SevenDaySonnet.ResetsAt
+
+	// For backward compatibility with UI expecting monthly quota:
+	// Use 5-hour utilization as the primary percentage
+	quotaInfo.QuotaPercentage = quotaInfo.FiveHourUtilization
 	quotaInfo.QuotaResetDate = usageData.FiveHour.ResetsAt
 
 	// Parse reset time
@@ -160,11 +179,8 @@ func (o *ClaudeAuth) queryOAuthUsage(ctx context.Context, accessToken string) (*
 		}
 	}
 
-	// Set plan type based on available data (basic OAuth accounts)
-	quotaInfo.PlanType = "oauth"
-
-	log.Debugf("Successfully retrieved OAuth usage: 5h=%.1f%%, 7d=%.1f%%",
-		fiveHourPercent, usageData.SevenDay.Utilization*100)
+	log.Debugf("Successfully retrieved OAuth usage: 5h=%.1f%%, 7d=%.1f%%, 7d-sonnet=%.1f%%",
+		quotaInfo.FiveHourUtilization, quotaInfo.SevenDayUtilization, quotaInfo.SevenDaySonnetUtil)
 
 	return quotaInfo, nil
 }

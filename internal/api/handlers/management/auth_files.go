@@ -2371,6 +2371,14 @@ func (h *Handler) GetAuthFileQuota(c *gin.Context) {
 			"reset_date":       quota.QuotaResetDate,
 			"reset_time":       quota.QuotaResetTime,
 		},
+		"oauth_usage": gin.H{
+			"five_hour_utilization":  fmt.Sprintf("%.1f%%", quota.FiveHourUtilization),
+			"five_hour_resets_at":    quota.FiveHourResetsAt,
+			"seven_day_utilization":  fmt.Sprintf("%.1f%%", quota.SevenDayUtilization),
+			"seven_day_resets_at":    quota.SevenDayResetsAt,
+			"seven_day_sonnet_util":  fmt.Sprintf("%.1f%%", quota.SevenDaySonnetUtil),
+			"seven_day_sonnet_resets": quota.SevenDaySonnetResets,
+		},
 		"rate_limit": gin.H{
 			"requests_limit":     quota.RequestsLimit,
 			"requests_remaining": quota.RequestsRemaining,

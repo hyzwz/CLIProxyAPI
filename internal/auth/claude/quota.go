@@ -14,7 +14,9 @@ import (
 )
 
 const (
-	// ConsoleAPIBaseURL is the base URL for Anthropic Console API
+	// ClaudeAIAPIBaseURL is the base URL for Claude.ai API (for OAuth accounts)
+	ClaudeAIAPIBaseURL = "https://claude.ai/api"
+	// ConsoleAPIBaseURL is the base URL for Anthropic Console API (for API keys)
 	ConsoleAPIBaseURL = "https://console.anthropic.com/api/v1"
 )
 
@@ -67,31 +69,120 @@ type quotaResponse struct {
 	} `json:"account"`
 }
 
-// GetQuotaInfo queries the Anthropic Console API for quota information
+// GetQuotaInfo queries the Claude.ai API for organization and quota information
 func (o *ClaudeAuth) GetQuotaInfo(ctx context.Context, accessToken string) (*QuotaInfo, error) {
 	if strings.TrimSpace(accessToken) == "" {
 		return nil, fmt.Errorf("access token is required")
 	}
 
-	// Try multiple possible endpoints
-	endpoints := []string{
-		"/organization/usage",
-		"/organization/quota",
-		"/account/usage",
-		"/usage",
+	// Use claude.ai/api/organizations endpoint (this works for OAuth tokens)
+	return o.queryOrganizations(ctx, accessToken)
+}
+
+// queryOrganizations queries claude.ai/api/organizations for OAuth account info
+func (o *ClaudeAuth) queryOrganizations(ctx context.Context, accessToken string) (*QuotaInfo, error) {
+	url := ClaudeAIAPIBaseURL + "/organizations"
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	var lastErr error
-	for _, endpoint := range endpoints {
-		quota, err := o.queryQuotaEndpoint(ctx, accessToken, endpoint)
-		if err == nil {
-			return quota, nil
+	// Use Bearer token authentication for OAuth tokens
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Debugf("Organizations API returned status %d: %s", resp.StatusCode, string(body))
+
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("authentication failed - token may be invalid or expired")
 		}
-		lastErr = err
-		log.Debugf("Failed to query %s: %v", endpoint, err)
+
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	return nil, fmt.Errorf("failed to query quota from all endpoints: %w", lastErr)
+	// Parse organizations response
+	var orgs []map[string]interface{}
+	if err := json.Unmarshal(body, &orgs); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(orgs) == 0 {
+		return nil, fmt.Errorf("no organizations found for this account")
+	}
+
+	// Find the best organization (one with most capabilities including 'chat')
+	var bestOrg map[string]interface{}
+	maxCaps := 0
+	for _, org := range orgs {
+		caps, ok := org["capabilities"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		// Check if has 'chat' capability
+		hasChat := false
+		for _, cap := range caps {
+			if capStr, ok := cap.(string); ok && capStr == "chat" {
+				hasChat = true
+				break
+			}
+		}
+
+		if hasChat && len(caps) > maxCaps {
+			bestOrg = org
+			maxCaps = len(caps)
+		}
+	}
+
+	if bestOrg == nil {
+		return nil, fmt.Errorf("no organization with chat capability found")
+	}
+
+	// Extract quota information from organization data
+	quotaInfo := &QuotaInfo{
+		LastUpdated: time.Now(),
+	}
+
+	// Extract basic organization info
+	if uuid, ok := bestOrg["uuid"].(string); ok {
+		quotaInfo.OrganizationID = uuid
+	}
+	if name, ok := bestOrg["name"].(string); ok {
+		quotaInfo.OrganizationName = name
+	}
+
+	// Extract plan/subscription information
+	if settings, ok := bestOrg["settings"].(map[string]interface{}); ok {
+		if plan, ok := settings["plan"].(map[string]interface{}); ok {
+			if planType, ok := plan["type"].(string); ok {
+				quotaInfo.PlanType = planType
+			}
+		}
+	}
+
+	// Note: claude.ai/api/organizations doesn't return detailed usage quotas
+	// This endpoint primarily returns organization metadata and capabilities
+	// For detailed usage, would need different endpoint or approach
+
+	log.Debugf("Successfully retrieved organization info: %s (Plan: %s)",
+		quotaInfo.OrganizationName, quotaInfo.PlanType)
+
+	return quotaInfo, nil
 }
 
 // queryQuotaEndpoint queries a specific Anthropic Console API endpoint
